@@ -1,7 +1,15 @@
+import React from 'react';
 import { motion } from 'motion/react';
 import { AlertCircle, TrendingUp, CheckCircle2, AlertTriangle, Download } from 'lucide-react';
 import { useState } from 'react';
 import html2canvas from 'html2canvas';
+
+function stripUnsupportedColors(input: string | null): string | null {
+  if (!input) return input;
+  let output = input.replace(/oklch\([^)]+\)/g, '#94a3b8');
+  output = output.replace(/color-mix\([^)]*\)/g, 'rgba(148,163,184,0.3)');
+  return output;
+}
 
 interface AnalysisResult {
   diagnosis: string;
@@ -32,45 +40,70 @@ export function DiagnosisOverlay({ result, visualizationRef, isDarkMode }: Diagn
         scale: 2,
         logging: false,
         useCORS: true,
-        ignoreElements: (element) => {
-          // Skip elements that might cause issues
-          return false;
-        },
+        ignoreElements: () => false,
         onclone: (clonedDoc) => {
-          // Convert oklch colors to hex in the cloned document
+          clonedDoc.querySelectorAll('style').forEach((styleTag) => {
+            if (styleTag.textContent?.includes('oklch') || styleTag.textContent?.includes('color-mix')) {
+              styleTag.textContent = stripUnsupportedColors(styleTag.textContent) ?? '';
+            }
+          });
+          clonedDoc.querySelectorAll<HTMLElement>('[style]').forEach((el) => {
+            const sanitized = stripUnsupportedColors(el.getAttribute('style'));
+            if (sanitized) {
+              el.setAttribute('style', sanitized);
+            }
+          });
           const style = clonedDoc.createElement('style');
           style.textContent = `
-            * {
-              --foreground: #1a1a1a !important;
-              --background: #ffffff !important;
-              --card: #ffffff !important;
-              --card-foreground: #1a1a1a !important;
-              --popover: #ffffff !important;
-              --popover-foreground: #1a1a1a !important;
-              --primary: #030213 !important;
+            :root, * {
+              --foreground: #0f172a !important;
+              --background: #020617 !important;
+              --card: #0f172a !important;
+              --card-foreground: #f8fafc !important;
+              --popover: #0f172a !important;
+              --popover-foreground: #f8fafc !important;
+              --primary: #2563eb !important;
               --primary-foreground: #ffffff !important;
-              --secondary: #f3f3f5 !important;
-              --secondary-foreground: #030213 !important;
-              --muted: #ececf0 !important;
-              --muted-foreground: #717182 !important;
-              --accent: #e9ebef !important;
-              --accent-foreground: #030213 !important;
-              --destructive: #d4183d !important;
+              --secondary: #1e293b !important;
+              --secondary-foreground: #e2e8f0 !important;
+              --muted: #1e293b !important;
+              --muted-foreground: #94a3b8 !important;
+              --accent: #1e293b !important;
+              --accent-foreground: #e2e8f0 !important;
+              --destructive: #ef4444 !important;
               --destructive-foreground: #ffffff !important;
-              --border: rgba(0, 0, 0, 0.1) !important;
-              --input: transparent !important;
-              --ring: #a0a0a0 !important;
+              --border: rgba(148, 163, 184, 0.3) !important;
+              --input: rgba(15, 23, 42, 0.8) !important;
+              --ring: rgba(14, 165, 233, 0.8) !important;
+              color: inherit !important;
+            }
+            body, .min-h-screen {
+              background: #020617 !important;
+            }
+            .bg-gradient-to-br {
+              background-image: none !important;
+              background-color: #020617 !important;
             }
           `;
           clonedDoc.head.appendChild(style);
-        }
+        },
       });
       
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, 'image/png', 1)
+      );
+
+      if (!blob) {
+        throw new Error('Unable to export captured canvas');
+      }
+
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       const timestamp = new Date().toISOString().split('T')[0];
       link.download = `medical-analysis-${timestamp}.png`;
-      link.href = canvas.toDataURL('image/png');
+      link.href = url;
       link.click();
+      URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error saving image:', error);
       alert('Failed to save image. Please try again.');

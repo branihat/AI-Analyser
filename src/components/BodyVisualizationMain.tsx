@@ -7,6 +7,7 @@ interface BodyVisualizationMainProps {
   isAnalyzing: boolean;
   severity?: 'low' | 'medium' | 'high';
   isDarkMode: boolean;
+  captureRef?: React.RefObject<HTMLDivElement>;
 }
 
 export function BodyVisualizationMain({ 
@@ -14,7 +15,8 @@ export function BodyVisualizationMain({
   organDetails,
   isAnalyzing,
   severity,
-  isDarkMode
+  isDarkMode,
+  captureRef,
 }: BodyVisualizationMainProps) {
   const getSeverityColor = () => {
     if (!severity) return '#64748b';
@@ -27,7 +29,10 @@ export function BodyVisualizationMain({
   };
 
   return (
-    <div className={`h-full flex items-center justify-center relative ${isDarkMode ? 'bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900' : 'bg-gradient-to-br from-slate-100 via-slate-50 to-slate-100'}`}>
+    <div
+      ref={captureRef}
+      className={`h-full flex items-center justify-center relative ${isDarkMode ? 'bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900' : 'bg-gradient-to-br from-slate-100 via-slate-50 to-slate-100'}`}
+    >
       {/* Background Grid */}
       <div className="absolute inset-0 opacity-20">
         <div className="h-full w-full" 

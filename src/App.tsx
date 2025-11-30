@@ -146,7 +146,7 @@ export default function App() {
       <div className="max-w-[1800px] mx-auto">
         <div className="flex h-[calc(100vh-81px)]">
           {/* Main Body Visualization Area */}
-          <div className="flex-1 relative" ref={visualizationRef}>
+          <div className="flex-1 relative">
             {/* Invisible Grid Table Overlay - Pre-tagged to organs */}
             {analysisResult && (
               <div className="absolute inset-0 pointer-events-none z-0">
@@ -167,6 +167,7 @@ export default function App() {
             )}
 
             <BodyVisualizationMain 
+              captureRef={visualizationRef}
               highlightedOrgans={analysisResult?.organs || []}
               organDetails={analysisResult?.organDetails}
               isAnalyzing={isAnalyzing}

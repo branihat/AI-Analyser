@@ -42,12 +42,50 @@ const ORGAN_COLORS: Record<OrganKey, string> = {
   pancreas: '#f59e0b',
 };
 
+// Grid configuration - invisible layout reference
+const GRID_CONFIG = {
+  // Left side columns
+  leftNameColumnX: 73, // Left organ name column
+  // Right side columns
+  rightNameColumnX: 27, // Right organ name column (mirrors right:73%)
+  // Vertical rows
+  rowHeight: 12.5, // 100% / 8 rows
+  startY: 6.25, // First row center
+  totalRows: 8,
+  cardAnchorOffset: 3.5, // Amount to move connector anchor upward (in %)
+  separatorOpacity: 0.1,
+};
+
+const LABEL_LAYOUT = {
+  minVerticalGap: 4, // gap between cards after accounting for their height
+  cardHeight: 7, // approximate height in percentage space
+  topPadding: 3,
+  bottomPadding: 3,
+  minWidth: 0,
+};
+
+const SEVERITY_COLORS = {
+  low: '#22c55e',
+  medium: '#fbbf24',
+  high: '#ef4444',
+  default: '#475569',
+} as const;
+
+interface ColumnPositionOverrides {
+  left?: number;
+  right?: number;
+}
+
+type SeverityLevel = keyof Omit<typeof SEVERITY_COLORS, 'default'>;
+
 interface BodyOrganSvgProps {
   highlightedOrgans: string[];
-  organDetails?: Record<string, string>; // Organ-specific issue details
+  organDetails?: Record<string, string>;
   isDarkMode?: boolean;
   className?: string;
   style?: React.CSSProperties;
+  columnPositions?: ColumnPositionOverrides;
+  severityLevels?: Partial<Record<OrganKey, SeverityLevel>>;
 }
 
 export function BodyOrganSvg({
@@ -56,6 +94,8 @@ export function BodyOrganSvg({
   isDarkMode = false,
   className,
   style,
+  columnPositions,
+  severityLevels = {},
 }: BodyOrganSvgProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -149,6 +189,8 @@ export function BodyOrganSvg({
         organDetails={organDetails}
         markerPositions={markerPositions}
         isOrganHighlighted={isOrganHighlighted}
+        columnPositions={columnPositions}
+        severityLevels={severityLevels}
       />
     </div>
   );
@@ -159,181 +201,101 @@ interface OrganMarkersContainerProps {
   organDetails: Record<string, string>;
   markerPositions: Partial<Record<OrganKey, { left: number; top: number }>>;
   isOrganHighlighted: (organKey: OrganKey) => boolean;
+  columnPositions?: ColumnPositionOverrides;
+  severityLevels: Partial<Record<OrganKey, SeverityLevel>>;
 }
 
-// Container component to handle label collision detection and positioning
 function OrganMarkersContainer({
   highlightedOrgans,
   organDetails,
   markerPositions,
   isOrganHighlighted,
+  columnPositions,
+  severityLevels,
 }: OrganMarkersContainerProps) {
-  // Calculate adjusted positions to avoid overlaps
-  const adjustedPositions = useMemo(() => {
-    const positions: Array<{
-      organKey: OrganKey;
-      originalPosition: { left: number; top: number };
-      adjustedPosition: { left: number; top: number; labelX: number; labelY: number };
-      isRightSide: boolean;
-      labelHeight: number;
-    }> = [];
-
-    const LABEL_HEIGHT = 6.5;
-    const MIN_VERTICAL_SPACING = 6;
-    const MIN_BOUND = 8;
-    const MAX_BOUND = 92;
-    const clampValue = (value: number) => Math.max(MIN_BOUND, Math.min(MAX_BOUND, value));
-    const clampCenterWithHeight = (center: number, height: number) => {
-      const half = height / 2;
-      if (center - half < MIN_BOUND) return MIN_BOUND + half;
-      if (center + half > MAX_BOUND) return MAX_BOUND - half;
-      return center;
-    };
-
-    const getOrganDetail = (organKey: OrganKey) =>
-      organDetails[organKey] || organDetails[ORGAN_LABELS[organKey].toLowerCase()];
-
-    const estimateLabelHeight = (detail?: string) => {
-      if (!detail) return LABEL_HEIGHT;
-      const clean = detail.replace(/\s+/g, ' ').trim();
-      if (!clean) return LABEL_HEIGHT;
-      const approxLines = Math.ceil(clean.length / 34);
-      return LABEL_HEIGHT + approxLines * 3.2;
-    };
-
-    (Object.keys(ORGAN_CLIP_IDS) as OrganKey[]).forEach((organKey) => {
-      if (!isOrganHighlighted(organKey)) return;
-      const position = markerPositions[organKey];
-      if (!position) return;
-
-      const organCenterX = position.left;
-      const organCenterY = position.top;
-      const isRightSide = organCenterX > 55;
-      const labelOffsetX = 36;
-      const labelX = isRightSide ? organCenterX - labelOffsetX : organCenterX + labelOffsetX;
-      const organDetail = getOrganDetail(organKey);
-      const dynamicLabelHeight = estimateLabelHeight(organDetail);
-
-      positions.push({
+  const gridPositions = useMemo(() => {
+    const highlighted = (Object.keys(ORGAN_CLIP_IDS) as OrganKey[])
+      .filter(isOrganHighlighted)
+      .map((organKey) => ({
         organKey,
-        originalPosition: position,
-        adjustedPosition: {
-          left: organCenterX,
-          top: organCenterY,
-          labelX,
-          labelY: clampCenterWithHeight(organCenterY, dynamicLabelHeight),
-        },
+        position: markerPositions[organKey],
+      }))
+      .filter(
+        (item): item is { organKey: OrganKey; position: { left: number; top: number } } =>
+          !!item.position
+      );
+
+    const halfHeight = LABEL_LAYOUT.cardHeight / 2;
+    const minCenter = LABEL_LAYOUT.topPadding + halfHeight;
+    const maxCenter = 100 - LABEL_LAYOUT.bottomPadding - halfHeight;
+    const spacing = LABEL_LAYOUT.cardHeight + LABEL_LAYOUT.minVerticalGap;
+
+    const clampCenter = (value: number) => Math.min(Math.max(value, minCenter), maxCenter);
+
+    const adjustSide = (items: typeof highlighted, columnX: number, isRightSide: boolean) => {
+      const sortedItems = items.sort((a, b) => a.position.top - b.position.top);
+      const centers: number[] = [];
+
+      sortedItems.forEach(({ position }, index) => {
+        const preferred = clampCenter(position.top);
+        const minAllowed = index === 0 ? minCenter : centers[index - 1] + spacing;
+        centers[index] = Math.max(preferred, minAllowed);
+      });
+
+      if (centers.length > 0 && centers[centers.length - 1] > maxCenter) {
+        let overflow = centers[centers.length - 1] - maxCenter;
+        for (let i = centers.length - 1; i >= 0 && overflow > 0; i -= 1) {
+          const prevBound = i === 0 ? minCenter : centers[i - 1] + spacing;
+          const availableShift = centers[i] - prevBound;
+          if (availableShift <= 0) continue;
+          const shift = Math.min(availableShift, overflow);
+          centers[i] -= shift;
+          overflow -= shift;
+        }
+      }
+
+      return sortedItems.map(({ organKey, position }, index) => ({
+        organKey,
+        organPosition: position,
         isRightSide,
-        labelHeight: dynamicLabelHeight,
-      });
-    });
-
-    const resolveSide = (isRightSide: boolean) => {
-      const sideEntries = positions
-        .filter((entry) => entry.isRightSide === isRightSide)
-        .sort((a, b) => a.originalPosition.top - b.originalPosition.top);
-
-      if (!sideEntries.length) return;
-
-      const availableHeight = MAX_BOUND - MIN_BOUND;
-      const totalHeight =
-        sideEntries.reduce((sum, entry) => sum + entry.labelHeight, 0) +
-        Math.max(0, sideEntries.length - 1) * MIN_VERTICAL_SPACING;
-      const spacing =
-        totalHeight > availableHeight
-          ? Math.max(
-              1.5,
-              (availableHeight - sideEntries.reduce((sum, entry) => sum + entry.labelHeight, 0)) /
-                Math.max(1, sideEntries.length - 1)
-            )
-          : MIN_VERTICAL_SPACING;
-
-      sideEntries.forEach((entry) => {
-        entry.adjustedPosition.labelY = clampCenterWithHeight(entry.originalPosition.top, entry.labelHeight);
-      });
-
-      const applyForwardSpacing = () => {
-        for (let i = 1; i < sideEntries.length; i++) {
-          const prev = sideEntries[i - 1];
-          const current = sideEntries[i];
-          const prevBottom = prev.adjustedPosition.labelY + prev.labelHeight / 2;
-          const currentTop = current.adjustedPosition.labelY - current.labelHeight / 2;
-          if (currentTop - prevBottom < spacing) {
-            const needed = spacing - (currentTop - prevBottom);
-            current.adjustedPosition.labelY += needed;
-          }
-        }
-      };
-
-      const applyBackwardSpacing = () => {
-        for (let i = sideEntries.length - 2; i >= 0; i--) {
-          const next = sideEntries[i + 1];
-          const current = sideEntries[i];
-          const nextTop = next.adjustedPosition.labelY - next.labelHeight / 2;
-          const currentBottom = current.adjustedPosition.labelY + current.labelHeight / 2;
-          if (nextTop - currentBottom < spacing) {
-            const needed = spacing - (nextTop - currentBottom);
-            current.adjustedPosition.labelY -= needed;
-          }
-        }
-      };
-
-      applyForwardSpacing();
-
-      const last = sideEntries[sideEntries.length - 1];
-      const lastBottom = last.adjustedPosition.labelY + last.labelHeight / 2;
-      if (lastBottom > MAX_BOUND) {
-        const overflow = lastBottom - MAX_BOUND;
-        for (let i = sideEntries.length - 1; i >= 0; i--) {
-          sideEntries[i].adjustedPosition.labelY -= overflow;
-        }
-        applyBackwardSpacing();
-      }
-
-      const first = sideEntries[0];
-      const firstTop = first.adjustedPosition.labelY - first.labelHeight / 2;
-      if (firstTop < MIN_BOUND) {
-        const underflow = MIN_BOUND - firstTop;
-        sideEntries.forEach((entry) => {
-          entry.adjustedPosition.labelY += underflow;
-        });
-        applyForwardSpacing();
-      }
-
-      sideEntries.forEach((entry) => {
-        entry.adjustedPosition.labelY = clampCenterWithHeight(entry.adjustedPosition.labelY, entry.labelHeight);
-      });
+        columnX,
+        rowY: centers[index],
+      }));
     };
 
-    resolveSide(true);
-    resolveSide(false);
+    const leftColumnX = columnPositions?.left ?? GRID_CONFIG.leftNameColumnX;
+    const rightColumnX = columnPositions?.right ?? GRID_CONFIG.rightNameColumnX;
 
-    positions.forEach((current) => {
-      const distance = Math.abs(current.adjustedPosition.labelY - current.originalPosition.top);
-      if (distance < LABEL_HEIGHT) {
-        current.adjustedPosition.labelY =
-          current.adjustedPosition.labelY < current.originalPosition.top
-            ? current.originalPosition.top - LABEL_HEIGHT - 1
-            : current.originalPosition.top + LABEL_HEIGHT + 1;
-      }
-      current.adjustedPosition.labelY = clampCenterWithHeight(current.adjustedPosition.labelY, current.labelHeight);
-    });
+    const leftAssignments = adjustSide(
+      highlighted.filter((item) => item.position.left <= 50),
+      leftColumnX,
+      false
+    );
+    const rightAssignments = adjustSide(
+      highlighted.filter((item) => item.position.left > 50),
+      rightColumnX,
+      true
+    );
 
-    return positions;
-  }, [markerPositions, highlightedOrgans, isOrganHighlighted, organDetails]);
+    return [...leftAssignments, ...rightAssignments];
+  }, [markerPositions, isOrganHighlighted, columnPositions]);
 
   return (
     <div className="pointer-events-none absolute inset-0">
-      {adjustedPositions.map(({ organKey, adjustedPosition, isRightSide }) => {
-        const organDetail = organDetails[organKey] || organDetails[ORGAN_LABELS[organKey].toLowerCase()];
+      {gridPositions.map(({ organKey, organPosition, isRightSide, columnX, rowY }) => {
+        const organDetail =
+          organDetails[organKey] || organDetails[ORGAN_LABELS[organKey].toLowerCase()];
+        const severityKey = severityLevels[organKey];
+        const severityColor = severityKey ? SEVERITY_COLORS[severityKey] : ORGAN_COLORS[organKey];
         return (
           <OrganMarker
             key={organKey}
             color={ORGAN_COLORS[organKey]}
+            severityColor={severityColor}
             label={ORGAN_LABELS[organKey]}
             issue={organDetail}
-            highlighted={true}
-            position={adjustedPosition}
+            organPosition={organPosition}
+            gridPosition={{ columnX, rowY }}
             isRightSide={isRightSide}
           />
         );
@@ -343,123 +305,143 @@ function OrganMarkersContainer({
 }
 
 interface OrganMarkerProps {
-  highlighted: boolean;
   color: string;
+  severityColor: string;
   label: string;
-  issue?: string; // Organ-specific issue detail
-  position: { left: number; top: number; labelX: number; labelY: number };
+  issue?: string;
+  organPosition: { left: number; top: number };
+  gridPosition: { columnX: number; rowY: number };
   isRightSide: boolean;
 }
 
 const OrganMarker: React.FC<OrganMarkerProps> = ({
-  highlighted,
   color,
+  severityColor,
   label,
   issue,
-  position,
+  organPosition,
+  gridPosition,
   isRightSide,
 }) => {
-  if (!highlighted) return null;
+  const organX = organPosition.left;
+  const organY = organPosition.top;
+  const { columnX, rowY } = gridPosition;
 
-  // Use pre-calculated positions from container (in percentages)
-  const organCenterX = position.left;
-  const organCenterY = position.top;
-  const labelX = position.labelX;
-  const labelY = position.labelY;
-  
-  // Calculate control points for curved line (in percentages)
-  // Create a smooth curve from organ to label, curving away from the body
-  const midX = (organCenterX + labelX) / 2;
-  const controlPointX = midX + (isRightSide ? -8 : 8); // Curve away from body
-  const controlPointY = (organCenterY + labelY) / 2;
-
+  const anchorX = columnX;
+  const connectorMidX = (organX + anchorX) / 2;
+  const pathCommand = `M ${anchorX} ${rowY} L ${connectorMidX} ${rowY} L ${organX} ${organY}`;
   return (
     <>
-      {/* Connecting Curved Line from Organ to Label */}
+      {/* Horizontal connecting line */}
       <svg
-        className="absolute inset-0 pointer-events-none w-full h-full"
-        style={{ zIndex: 1, overflow: 'visible' }}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          width: '100%',
+          height: '100%',
+          zIndex: 1,
+        }}
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
       >
         <motion.path
-          d={`M ${organCenterX} ${organCenterY} Q ${controlPointX} ${controlPointY} ${labelX} ${labelY}`}
+          d={pathCommand}
           fill="none"
           stroke={color}
-          strokeWidth="0.3"
-          strokeDasharray="0.8,0.5"
-          opacity={0.7}
+          strokeWidth="0.25"
+          strokeDasharray="1,0.6"
+          opacity={0.6}
           initial={{ pathLength: 0, opacity: 0 }}
-          animate={{ pathLength: 1, opacity: 0.7 }}
-          transition={{ duration: 0.6, delay: 0.3, ease: "easeOut" }}
+          animate={{ pathLength: 1, opacity: 0.6 }}
+          transition={{ duration: 0.6, delay: 0.2, ease: "easeOut" }}
         />
       </svg>
 
-      {/* Organ Marker (at organ center) */}
+      {/* Organ marker with pulsing animation */}
       <motion.div
         className="absolute"
         style={{
-          left: `${organCenterX}%`,
-          top: `${organCenterY}%`,
+          left: `${organX}%`,
+          top: `${organY}%`,
           transform: 'translate(-50%, -50%)',
           zIndex: 2,
         }}
-        initial={{ opacity: 0, scale: 0.9 }}
+        initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.3 }}
+        transition={{ duration: 0.4 }}
       >
-        <div className="relative h-10 w-10">
+        <div className="relative h-9 w-9">
           <motion.span
             className="absolute inset-0 rounded-full"
             style={{ backgroundColor: color, opacity: 0.2 }}
-            animate={{ scale: [1, 1.6, 1], opacity: [0.25, 0, 0.25] }}
-            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+            animate={{ scale: [1, 1.8, 1], opacity: [0.3, 0, 0.3] }}
+            transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
           />
           <span
-            className="relative flex h-10 w-10 items-center justify-center rounded-full text-lg text-white shadow-lg"
+            className="relative flex h-9 w-9 items-center justify-center rounded-full text-base text-white shadow-lg"
             style={{ backgroundColor: color }}
           >
-            ⚠
+            ⚠️
           </span>
         </div>
       </motion.div>
 
-      {/* Label Container (positioned away from body) */}
+      {/* Organ info card */}
       <motion.div
-        className="absolute flex flex-col gap-1.5"
+        className="absolute"
         style={{
-          left: `${labelX}%`,
-          top: `${labelY}%`,
-          transform: `translateY(-50%) ${isRightSide ? 'translateX(-100%)' : ''}`,
+          ...(isRightSide
+            ? { right: `${100 - columnX}%`, left: 'auto' }
+            : { left: `${columnX}%`, right: 'auto' }),
+          top: `${rowY}%`,
+          transform: isRightSide ? 'translate(0%, -50%)' : 'translate(-100%, -50%)',
           zIndex: 3,
-          alignItems: isRightSide ? 'flex-end' : 'flex-start',
+          minWidth: LABEL_LAYOUT.minWidth ? `${LABEL_LAYOUT.minWidth}%` : undefined,
+          width: 'max-content',
         }}
-        initial={{ opacity: 0, x: isRightSide ? 10 : -10 }}
+        initial={{ opacity: 0, x: isRightSide ? 40 : -40 }}
         animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.4, delay: 0.4 }}
+        transition={{ duration: 0.5, delay: 0.3 }}
       >
-        {/* Organ Label */}
         <div
-          className="rounded-md px-3 py-1.5 text-xs font-medium text-white shadow-lg whitespace-nowrap"
-          style={{ backgroundColor: 'rgba(42, 15, 15, 0.95)', border: `1px solid ${color}` }}
+          className="rounded-xl border shadow-lg px-3 py-2 backdrop-blur-sm"
+          style={{
+            backgroundColor: 'rgba(15, 23, 42, 0.92)',
+            borderColor: `${color}aa`,
+            boxShadow: `0 10px 25px ${color}20`,
+            borderTop: `1px solid rgba(148, 163, 184, ${GRID_CONFIG.separatorOpacity})`,
+          }}
         >
-          {label}
+          <div className="relative overflow-hidden rounded-md mb-1 h-7 flex items-center">
+            <motion.span
+              className="absolute inset-0 opacity-50"
+              style={{ backgroundColor: severityColor }}
+              animate={{ opacity: [0.25, 0.6, 0.25] }}
+              transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+            />
+            <div
+              className="relative text-[0.8rem] font-semibold uppercase tracking-wide text-white px-2 flex-1"
+              style={{ letterSpacing: '0.08em' }}
+            >
+              <span>{label}</span>
+            </div>
+          </div>
+          {issue && (
+            <p
+              className="text-[0.65rem] text-slate-200/80 leading-snug line-clamp-2"
+              style={{
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }}
+            >
+              {issue}
+            </p>
+          )}
         </div>
-
-        {/* Organ-Specific Issue Detail */}
-        {issue && (
-          <motion.div
-            initial={{ opacity: 0, y: -5 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.6 }}
-            className="rounded-md px-2.5 py-1.5 text-[10px] text-white shadow-lg max-w-[160px] text-left leading-tight"
-            style={{ backgroundColor: 'rgba(42, 15, 15, 0.95)', border: `1px solid ${color}` }}
-          >
-            {issue}
-          </motion.div>
-        )}
       </motion.div>
     </>
   );
 };
-
