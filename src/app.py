@@ -440,24 +440,29 @@ def health_check():
 
 
 if __name__ == '__main__':
-    # Development server
+    # Get port from environment variable (for production) or default to 5000
+    port = int(os.environ.get('PORT', 5000))
+    # Debug mode only in development
+    debug_mode = os.environ.get('FLASK_ENV') == 'development' or os.environ.get('DEBUG') == '1'
+    
     print("=" * 60)
     print("Medical Analyzer Flask Backend")
     print("=" * 60)
-    print(f"API endpoint: http://localhost:5000/api/analyze")
-    print(f"Health check: http://localhost:5000/api/health")
-    print(f"Frontend (after build): http://localhost:5000")
+    print(f"API endpoint: http://localhost:{port}/api/analyze")
+    print(f"Health check: http://localhost:{port}/api/health")
+    print(f"Frontend (after build): http://localhost:{port}")
     print("")
     if GEMINI_API_KEY:
         print(f"✓ Gemini API configured (Model: {GEMINI_MODEL})")
     else:
         print("✗ WARNING: GEMINI_API_KEY not found!")
         print("  Please set it in .env file or environment variables")
+    print(f"Mode: {'Development' if debug_mode else 'Production'}")
     print("=" * 60)
     print("")
     
     app.run(
-        debug=True,
-        host='0.0.0.0',
-        port=5000
+        debug=debug_mode,
+        host='0.0.0.0',  # Important: bind to all interfaces for production
+        port=port
     )
