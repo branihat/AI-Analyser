@@ -44,14 +44,22 @@ ALLOWED_ORGANS = {
 
 # CORS Configuration
 # For development: Allow requests from React dev server
-# For production: Restrict to your domain
-CORS(app, resources={
-    r"/api/*": {
-        "origins": ["http://localhost:3000", "http://localhost:5173", "http://localhost:5000"],
-        "methods": ["GET", "POST"],
-        "allow_headers": ["Content-Type"]
-    }
-})
+# For production: Restrict to your domains (Netlify, etc.)
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": [
+                "http://localhost:3000",
+                "http://localhost:5173",
+                "http://localhost:5000",
+                "https://doctoraiishere.netlify.app",
+            ],
+            "methods": ["GET", "POST"],
+            "allow_headers": ["Content-Type"],
+        }
+    },
+)
 
 
 @app.route('/api/analyze', methods=['POST'])
